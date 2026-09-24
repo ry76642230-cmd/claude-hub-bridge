@@ -42,6 +42,23 @@ claude.exe  --(Anthropic /v1/messages)-->  anthropic-hub-bridge :8820
 
 ## 用法
 
+### 新机器安装（一条命令）
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
+```
+
+`install.ps1` 会：① 注册看门狗计划任务（每 1 分钟检查 8820）；② 写开机自启；
+③ 立刻启动并做健康检查。所有路径由脚本自身位置推导，**clone 到哪都能跑**。
+
+前提：Node.js 已安装；Hub（`127.0.0.1:8788`）已在运行。
+
+> Hub 凭据（翻译层读它来调 Hub）按优先级解析：
+> 1. `HUB_SETTINGS` 环境变量（指向 settings.json）
+> 2. 仓库内 `hub-settings.json`（自行放置，已 gitignore）
+> 3. `HUB_API_KEY` 环境变量（直接给 key）
+> 4. 本机 WorkBuddy Hub 默认位置（**仅本机有效，换机请用 1~3**）
+
 ### 启动
 
 ```powershell

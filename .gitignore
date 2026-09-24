@@ -2,3 +2,6 @@ logs/
 probe-dir/
 hub-settings.json
 node_modules/
+
+# 计划任务 XML 备份：含本机 SID 与绝对路径，换机无意义
+*.task.xml.bak
