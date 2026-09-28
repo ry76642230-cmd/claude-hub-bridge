@@ -91,11 +91,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File restart-bridge.ps1
 
 ### 换模型
 
-默认上游模型是 `deepseek-v4.1-flash`。改法（优先级从高到低）：
+**最快的办法**：
+
+```powershell
+.\set-model.ps1                 # 看当前模型 + Hub 可用模型列表
+.\set-model.ps1 glm-5.3         # 切过去（写环境变量 -> 重启翻译层 -> 自动校验）
+.\set-model.ps1 -Clear          # 清除设置，回到默认 deepseek-v4.1-flash
+```
+
+**为什么不能在 claude 里直接 `/model` 换**：claude 传的模型名会被本层的
+`pickModel()` 改写，日志里能看到 `"model":"claude-opus-4-8" → "to":"deepseek-v4.1-flash"`。
+除非配了 `BRIDGE_MODEL_MAP`，否则 claude 侧选什么模型都不影响实际上游。
+
+手动改法（`set-model.ps1` 做的就是这些，优先级从高到低）：
 
 1. `BRIDGE_MODEL=kimi-k2.7` 环境变量；
 2. `BRIDGE_MODEL_MAP='{"claude-opus-4-8":"glm-5.3"}'` 按 claude 模型名精细映射；
 3. `BRIDGE_SMALL_MODEL` 单独指定 haiku 档（claude 用它跑标题等小任务）。
+
+> 环境变量在进程启动时读取，改完**必须重启翻译层**才生效：
+> `powershell -NoProfile -ExecutionPolicy Bypass -File restart-bridge.ps1`
+> 验证：`(Invoke-WebRequest http://127.0.0.1:8820/health).Content` 里的 `model` 字段。
 
 已确认可用的 Hub 模型（13 个，全部支持工具调用与视觉）：
 
