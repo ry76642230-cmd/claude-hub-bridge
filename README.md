@@ -45,13 +45,27 @@ claude.exe  --(Anthropic /v1/messages)-->  anthropic-hub-bridge :8820
 ### 新机器安装（一条命令）
 
 ```powershell
+git clone https://github.com/ry76642230-cmd/claude-hub-bridge.git
+cd claude-hub-bridge
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 ```
 
-`install.ps1` 会：① 注册看门狗计划任务（每 1 分钟检查 8820）；② 写开机自启；
-③ 立刻启动并做健康检查。所有路径由脚本自身位置推导，**clone 到哪都能跑**。
+`install.ps1` 五步全自动：
 
-前提：Node.js 已安装；Hub（`127.0.0.1:8788`）已在运行。
+| 步骤 | 动作 |
+|---|---|
+| `[0/5]` | 检查 `node`（`< 22` 告警，Claude Code 要求 ≥ 22）与千问办公（未装只给下载链接，**不阻塞本层**） |
+| `[1/5]` | **自动安装 Claude Code CLI**（`npm i -g @anthropic-ai/claude-code`，用户级前缀，无需管理员） |
+| `[2/5]` | 写 `~/.claude/settings.json` 的 `env` 块；原文件备份为 `settings.json.bak-<时间戳>`，**保留你的其它设置项** |
+| `[3/5]` | 注册看门狗计划任务（每 1 分钟检查 8820） |
+| `[4/5]` | 写开机自启 VBS（无窗口） |
+| `[5/5]` | 立刻启动并做健康检查 |
+
+可选开关：`-SkipClaude`（不装 CLI）、`-SkipClaudeSettings`（不改 claude 配置）。
+
+所有路径由脚本自身位置推导，**clone 到哪都能跑**。人工只剩一件事：给 Hub 绑账号（OAuth）。
+
+前提：Node.js ≥ 22；Hub 已在运行（默认 `127.0.0.1:8788`）。
 
 > Hub 凭据（翻译层读它来调 Hub）按优先级解析：
 > 1. `HUB_SETTINGS` 环境变量（指向 settings.json）
