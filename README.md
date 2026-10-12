@@ -256,3 +256,17 @@ setx HUB_BASE_URL "http://127.0.0.1:8788"
 
 依赖链上任一环挂掉，千问办公都会报 `API Error: Unable to connect to API (ConnectionRefused)` 或类似错误。
 排查顺序：先看 8820，再看 8788（Docker `wb-proxy`），最后看 `clauded-qwenwork\src\logs`。
+
+## 在千问办公里直接切模型（2026-10-12）
+
+除了 `set-model.ps1`（改全局默认），翻译层现在还支持**客户端点名模型**：
+
+- 启动时拉取 Hub `/v1/models` 清单（5 分钟刷新一次，`BRIDGE_MODELS_TTL_MS` 可调），
+  客户端请求里的模型名只要在这份清单内，就**原样透传**到 Hub；不在清单内仍走
+  `BRIDGE_MODEL_MAP` / haiku 映射 / `DEFAULT_MODEL`。
+- 新增 `GET /v1/models`（转发 Hub 的模型列表），给千问办公的模型选择器提供数据源。
+- 实测（`logs/bridge.log`）：`claude --model glm-5.3` → `{"model":"glm-5.3","to":"glm-5.3"}`；
+  不点名 → 仍为 `deepseek-v4.1-flash`。
+
+配合 `clauded-qwenwork` 的 shim（`get_models` 直出 Hub 清单），千问办公的模型下拉里
+点谁就是谁；`set-model.ps1` 仍用于改「不点名时」的默认模型。

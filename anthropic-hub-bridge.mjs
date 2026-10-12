@@ -61,6 +61,27 @@ function resolveHubKey() {
 }
 const HUB_KEY = resolveHubKey();
 
+// ---- Hub 模型清单：供「客户端点名的模型」原样透传，以及给模型选择器提供可用列表 ----
+let HUB_MODELS = new Set();
+let HUB_MODELS_AT = 0;
+const HUB_MODELS_TTL = Number(process.env.BRIDGE_MODELS_TTL_MS || 5 * 60 * 1000);
+
+async function refreshHubModels(force) {
+  if (!force && HUB_MODELS.size && Date.now() - HUB_MODELS_AT < HUB_MODELS_TTL) return;
+  try {
+    const r = await fetch(HUB_BASE_URL + "/v1/models", {
+      headers: HUB_KEY ? { Authorization: "Bearer " + HUB_KEY } : {},
+    });
+    if (!r.ok) { log("WARN", "hub /v1/models -> " + r.status); return; }
+    const j = await r.json();
+    const ids = (Array.isArray(j.data) ? j.data : [])
+      .map((m) => String((m && m.id) || "")).filter(Boolean);
+    if (ids.length) { HUB_MODELS = new Set(ids); HUB_MODELS_AT = Date.now(); }
+  } catch (e) {
+    log("WARN", "cannot refresh hub models: " + e.message);
+  }
+}
+
 function log(tag, msg) {
   const line = new Date().toISOString() + " [" + tag + "] " + msg + "\n";
   try { appendFileSync(LOG_FILE, line); } catch {}
@@ -198,6 +219,8 @@ function pickModel(reqModel) {
       if (map[name]) return map[name];
     } catch {}
   }
+  // 客户端点名的 Hub 模型：原样透传（千问办公的模型选择器靠这条生效）
+  if (HUB_MODELS.has(name)) return name;
   // claude 的 haiku 档通常跑标题/小任务，单独映射可省钱
   if (/haiku/i.test(name)) return SMALL_MODEL;
   return DEFAULT_MODEL;
@@ -495,6 +518,22 @@ const server = createServer((req, res) => {
     }));
   }
 
+  if (req.method === "GET" && path === "/v1/models") {
+    void refreshHubModels(false);
+    return void (async () => {
+      try {
+        const r = await fetch(HUB_BASE_URL + "/v1/models", {
+          headers: HUB_KEY ? { Authorization: "Bearer " + HUB_KEY } : {},
+        });
+        const text = await r.text();
+        res.writeHead(r.status, { "Content-Type": "application/json" });
+        res.end(text);
+      } catch (e) {
+        anthropicError(res, 502, "hub unreachable: " + e.message);
+      }
+    })();
+  }
+
   if (req.method !== "POST") {
     log("MISS", req.method + " " + path);
     res.writeHead(404, { "Content-Type": "application/json" });
@@ -548,6 +587,9 @@ server.on('error', (e) => {
 server.listen(PORT, HOST, () => {
   log("BOOT", "anthropic-hub-bridge http://" + HOST + ":" + PORT + " -> " + HUB_BASE_URL
     + " hubKey=" + (HUB_KEY ? "set" : "MISSING") + " model=" + DEFAULT_MODEL);
+  void refreshHubModels(true);
+  const modelsTimer = setInterval(() => void refreshHubModels(false), HUB_MODELS_TTL);
+  modelsTimer.unref?.();
   console.log("");
   console.log("  Anthropic endpoint : http://" + HOST + ":" + PORT);
   console.log("  Upstream hub       : " + HUB_BASE_URL);
