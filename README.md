@@ -270,3 +270,36 @@ setx HUB_BASE_URL "http://127.0.0.1:8788"
 
 配合 `clauded-qwenwork` 的 shim（`get_models` 直出 Hub 清单），千问办公的模型下拉里
 点谁就是谁；`set-model.ps1` 仍用于改「不点名时」的默认模型。
+## 不装 Hub 的机器：一键接上远端 Hub（Tailscale）
+
+如果团队里只有一台机器跑 WorkBuddy Hub，其他机器只想用、不想装 Docker 和登账号：
+
+```powershell
+cd $env:USERPROFILE\Documents\claude-hub-bridge
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -RemoteHub
+```
+
+`-RemoteHub` 会在安装流程开头插入 `setup-remote-hub.ps1`，自动完成：
+
+| 步骤 | 做什么 |
+|---|---|
+| 1 | 检查 Tailscale，未装则用 winget 静默安装；没登录就拉起 `tailscale up` |
+| 2 | 扫 tailnet 里在线机器，逐个探 `/health`，找出真正托管 Hub 的那台 |
+| 3 | 取 Hub API Key（`-RemoteHubKey` / 已有 `HUB_API_KEY` / 本地 settings.json / 交互输入），并实拉 `/v1/models` 验证可用 |
+| 4 | 写用户级 `HUB_BASE_URL`（指向远端）+ `HUB_API_KEY`，重启翻译层 |
+| 5 | 校验翻译层 `upstream` 与 `hubKey` |
+
+参数：`-RemoteHubHost <tailscale_ip|MagicDNS>`、`-RemoteHubPeer <主机名>`、`-RemoteHubKey <key>`。
+不装 Hub 只想要这一步时，可以单独跑：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File setup-remote-hub.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File setup-remote-hub.ps1 -Peer desktop-4e6vmnr
+```
+
+注意：
+
+- 远端机器必须**开机且 Tailscale 在线**，它关机你就连不上（这是借用的代价）。
+- 本机如果以后要自己装 Hub，把 `HUB_BASE_URL` 改回 `http://127.0.0.1:8788` 并重启翻译层即可。
+- `setup-remote-hub.ps1` 在 Windows PowerShell 5.1 下走 `WebClient` 直连（5.1 的
+  `Invoke-WebRequest` 没有 `-NoProxy`，系统代理会把 tailnet 请求劫持成 502）。

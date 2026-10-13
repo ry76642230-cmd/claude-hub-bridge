@@ -14,8 +14,12 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -SkipClaude -SkipClaudeSettings
 param(
   [switch]$SkipClaude,
-  [switch]$SkipClaudeSettings
-)
+  [switch]$SkipClaudeSettings,
+  [switch]$RemoteHub,        # 本机不装 Hub，改用 Tailscale 上另一台机器的 Hub
+  [string]$RemoteHubHost,    # 远端 Hub 的 Tailscale IP / MagicDNS 名（不给则自动探测）
+  [string]$RemoteHubPeer,    # 远端机器的 Tailscale 主机名（与 RemoteHubHost 二选一）
+  [string]$RemoteHubKey      # 远端 Hub 的 API Key（不给则读本地/交互输入）
+ )
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
@@ -65,13 +69,43 @@ if ($qwExe) {
 if (-not (Test-Path $bridgeJs))  { throw "缺少 $bridgeJs" }
 if (-not (Test-Path $vbsHidden)) { throw "缺少 $vbsHidden" }
 
-# ---- 1. Claude Code CLI ----
+# ---- 0.5 上游来源：本机 Hub 还是远端 Hub（Tailscale）----
+# 不装 Hub 的机器用 -RemoteHub 一步接好：装 Tailscale → 找到托管 Hub 的机器 → 配好上游和 key。
+if ($RemoteHub) {
+  Write-Host '[0.5] 配置远端 Hub（Tailscale）...' -ForegroundColor Cyan
+  $setup = Join-Path $root 'setup-remote-hub.ps1'
+  if (-not (Test-Path $setup)) { throw "缺少 $setup" }
+  $setupArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $setup)
+  if ($RemoteHubHost) { $setupArgs += @('-HubHost', $RemoteHubHost) }
+  if ($RemoteHubPeer) { $setupArgs += @('-Peer', $RemoteHubPeer) }
+  if ($RemoteHubKey)  { $setupArgs += @('-HubKey', $RemoteHubKey) }
+  & powershell @setupArgs
+  if ($LASTEXITCODE -ne 0) { throw '远端 Hub 配置失败，见上面的输出' }
+  Write-Host '[0.5] 远端 Hub 已接好' -ForegroundColor Green
+} else {
+  $localHub = $false
+  try {
+    $probe = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 'http://127.0.0.1:8788/health'
+    if ($probe.StatusCode -eq 200) { $localHub = $true }
+  } catch { }
+  if ($localHub) {
+    Write-Host '[0.5] 检测到本机 8788 有 Hub，使用本机 Hub' -ForegroundColor Green
+  } else {
+    Write-Host '[0.5] 本机没有 Hub（8788 无响应）' -ForegroundColor Yellow
+    Write-Host '      两种选择：'
+    Write-Host '        A. 本机自己装 Hub：见 docs\INSTALL-NEW-PC.md 第一步（需 Docker + 账号 OAuth）'
+    Write-Host '        B. 借用别的机器上的 Hub（需 Tailscale）：重跑本安装器并加 -RemoteHub'
+    Write-Host '           例: powershell -ExecutionPolicy Bypass -File install.ps1 -RemoteHub'
+    Write-Host '     继续安装也可以，稍后随时用 setup-remote-hub.ps1 补上网关。' -ForegroundColor Yellow
+  }
+}
+
 if ($SkipClaude) {
   Write-Host '[1/5] 跳过 Claude CLI 安装（-SkipClaude）'
 } else {
   $claudeExe = (Get-Command claude -ErrorAction SilentlyContinue).Source
   if (-not $claudeExe) {
-    $guess = Join-Path $env:APPDATA 'npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe'
+     = Join-Path $env:APPDATA 'npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe'
     if (Test-Path $guess) { $claudeExe = $guess }
   }
   if ($claudeExe) {
@@ -81,7 +115,7 @@ if ($SkipClaude) {
     $npm = (Get-Command npm -ErrorAction SilentlyContinue).Source
     if (-not $npm) { throw '未找到 npm，无法自动安装 Claude Code CLI' }
     Write-Host '[1/5] 安装 Claude Code CLI（npm 全局，用户级，无需管理员）...'
-    & $npm install -g '@anthropic-ai/claude-code' 2>&1 | Select-Object -Last 5
+    &  install -g '@anthropic-ai/claude-code' 2>&1 | Select-Object -Last 5
     $guess = Join-Path $env:APPDATA 'npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe'
     if (Test-Path $guess) {
       Write-Host "[1/5] 安装完成 : $(& $guess --version 2>&1 | Select-Object -First 1)" -ForegroundColor Green
