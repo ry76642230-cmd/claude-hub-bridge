@@ -63,6 +63,7 @@ const HUB_KEY = resolveHubKey();
 
 // ---- Hub 模型清单：供「客户端点名的模型」原样透传，以及给模型选择器提供可用列表 ----
 let HUB_MODELS = new Set();
+let HUB_MODEL_META = new Map();   // id -> { efforts, fixed, def }
 let HUB_MODELS_AT = 0;
 const HUB_MODELS_TTL = Number(process.env.BRIDGE_MODELS_TTL_MS || 5 * 60 * 1000);
 
@@ -74,9 +75,26 @@ async function refreshHubModels(force) {
     });
     if (!r.ok) { log("WARN", "hub /v1/models -> " + r.status); return; }
     const j = await r.json();
-    const ids = (Array.isArray(j.data) ? j.data : [])
-      .map((m) => String((m && m.id) || "")).filter(Boolean);
-    if (ids.length) { HUB_MODELS = new Set(ids); HUB_MODELS_AT = Date.now(); }
+    const list = Array.isArray(j.data) ? j.data : [];
+    const ids = list.map((m) => String((m && m.id) || "")).filter(Boolean);
+    if (ids.length) {
+      HUB_MODELS = new Set(ids);
+      const meta = new Map();
+      for (const m of list) {
+        const id = String((m && m.id) || "");
+        if (!id) continue;
+        const efforts = Array.isArray(m.reasoning_efforts)
+          ? m.reasoning_efforts.map((x) => String(x).toLowerCase()).filter(Boolean)
+          : [];
+        meta.set(id, {
+          efforts,
+          fixed: m.reasoning_fixed_effort || null,
+          def: m.reasoning_default_effort || null,
+        });
+      }
+      HUB_MODEL_META = meta;
+      HUB_MODELS_AT = Date.now();
+    }
   } catch (e) {
     log("WARN", "cannot refresh hub models: " + e.message);
   }
@@ -226,13 +244,61 @@ function pickModel(reqModel) {
   return DEFAULT_MODEL;
 }
 
+// 思考强度：默认完全不动（沿用 Hub 的模型默认档）；设了 BRIDGE_EFFORT 才干预：
+//   strongest = 每个模型「自己支持的最高档」（推荐，兼容各模型不同档位表）
+//   其它值     = 指定档；该模型不支持时退回它的最高档并记日志
+// 小任务（claude 的 haiku 档：标题/摘要）默认不抬高，除非 BRIDGE_EFFORT_INCLUDE_SMALL=1
+const EFFORT_RANK = { minimal: 0, low: 1, medium: 2, high: 3, xhigh: 4, max: 5, ultra: 6 };
+
+function strongestEffort(efforts) {
+  let best = null;
+  for (const e of efforts) {
+    if (best === null || (EFFORT_RANK[e] ?? -1) > (EFFORT_RANK[best] ?? -1)) best = e;
+  }
+  return best;
+}
+
+function effortMode() {
+  return String(process.env.BRIDGE_EFFORT || "").trim().toLowerCase();
+}
+
+function pickEffort(reqModel, targetModel) {
+  const mode = effortMode();
+  if (!mode) return null;
+  if (process.env.BRIDGE_EFFORT_INCLUDE_SMALL !== "1"
+      && /haiku/i.test(String(reqModel || "")) && targetModel !== DEFAULT_MODEL) return null;
+  const meta = HUB_MODEL_META.get(targetModel);
+  if (meta && meta.fixed) return null;
+  const declared = (meta && meta.efforts) || [];
+  if (!declared.length) return null;
+  if (mode === "strongest") return strongestEffort(declared);
+  if (declared.includes(mode)) return mode;
+  const fallback = strongestEffort(declared);
+  log("EFFORT", targetModel + " 不支持 " + mode + "，改用最强档 " + fallback);
+  return fallback;
+}
+
+function effortPlan() {
+  const mode = effortMode();
+  if (!mode) return { mode: null, note: "未设置 BRIDGE_EFFORT：各模型用 Hub 默认档" };
+  const plan = {};
+  for (const [id, meta] of HUB_MODEL_META) {
+    if (meta.fixed) { plan[id] = "固定:" + meta.fixed; continue; }
+    if (!meta.efforts.length) { plan[id] = "(上游未声明)"; continue; }
+    plan[id] = meta.efforts.includes(mode) ? mode : strongestEffort(meta.efforts);
+  }
+  return { mode, plan };
+}
 function buildOpenAIRequest(body) {
+  const targetModel = pickModel(body.model);
   const oai = {
-    model: pickModel(body.model),
+    model: targetModel,
     messages: anthropicToOpenAIMessages(body.system, body.messages),
     stream: true,
     stream_options: { include_usage: true },
   };
+  const effort = pickEffort(body.model, targetModel);
+  if (effort) oai.reasoning_effort = effort;
   if (body.max_tokens != null) oai.max_tokens = body.max_tokens;
   const tools = anthropicToolsToOpenAI(body.tools);
   if (tools) oai.tools = tools;
@@ -494,7 +560,7 @@ async function handleMessages(res, body, raw) {
     if (slot.args) { try { input = JSON.parse(slot.args); } catch { input = { _raw: slot.args }; } }
     content.push({ type: "tool_use", id: slot.id, name: slot.name || "tool", input });
   }
-  res.writeHead(200, { "Content-Type": "application/json" });
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify({
     id: msgId, type: "message", role: "assistant", model: modelName,
     content, stop_reason: stopReason, stop_sequence: null, usage,
@@ -511,9 +577,10 @@ const server = createServer((req, res) => {
   const path = (url.pathname.replace(/\/+$/, "") || "/");
 
   if (req.method === "GET" && (path === "/health" || path === "/")) {
-    res.writeHead(200, { "Content-Type": "application/json" });
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     return res.end(JSON.stringify({
       ok: true, upstream: HUB_BASE_URL, model: DEFAULT_MODEL,
+      effort: effortPlan(),
       hubKey: HUB_KEY ? "set" : "MISSING",
     }));
   }

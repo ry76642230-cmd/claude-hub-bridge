@@ -303,3 +303,24 @@ powershell -NoProfile -ExecutionPolicy Bypass -File setup-remote-hub.ps1 -Peer d
 - 本机如果以后要自己装 Hub，把 `HUB_BASE_URL` 改回 `http://127.0.0.1:8788` 并重启翻译层即可。
 - `setup-remote-hub.ps1` 在 Windows PowerShell 5.1 下走 `WebClient` 直连（5.1 的
   `Invoke-WebRequest` 没有 `-NoProxy`，系统代理会把 tailnet 请求劫持成 502）。
+## 思考强度（千问办公 → Claude → 翻译层 → Hub）
+
+翻译层默认**不传**强度，各模型用 Hub 目录里的默认档（多为 `high`）。要统一抬高：
+
+```powershell
+.\set-effort.ps1              # 看当前设置 + 每个模型实际会用哪一档
+.\set-effort.ps1 strongest    # 每个模型用「自己支持的最高档」（推荐）
+.\set-effort.ps1 high         # 指定档；模型不支持时自动退回该模型的最高档
+.\set-effort.ps1 -Clear       # 清空，回到 Hub 默认档
+```
+
+- 档位来源 = Hub `/v1/models` 的 `supportedEfforts`；`strongest` 按
+  `minimal < low < medium < high < xhigh < max < ultra` 取该模型最高一档。
+- **有些模型被上游钉死在固定档**（`reasoning_fixed_effort`，如 `glm-5.1`、`glm-5v-turbo`、
+  `minimax-m3`、`kimi-k2.6/k2.7` = `medium`）：这类传什么都没用，脚本会标成「固定:medium」。
+- 小任务（claude 的 haiku 档：标题/摘要）默认**不**抬高，避免白烧额度；要一起抬高再设
+  `BRIDGE_EFFORT_INCLUDE_SMALL=1`。
+- 强度越高越慢、越费额度（reasoning tokens 也计费）。
+- 想验证实际生效：看 Hub 日志 `chat: model=... client_effort='max' -> upstream_effort='max'`。
+- 注意：直接跑 `restart-bridge.ps1` 会丢掉用户级变量（只有新进程才继承）——用 `set-effort.ps1` 设置，
+  或重启电脑即可恢复。
